@@ -28,3 +28,5 @@ net.floodlightcontroller.accesscontrollist.ACL
 net.floodlightcontroller.dhcpserver.DHCPServer
 net.floodlightcontroller.learningswitch.LearningSwitch
 net.floodlightcontroller.statistics.StatisticsCollector
+net.floodlightcontroller.mactracker.MACTracker
+net.floodlightcontroller.mtd.mtd
