@@ -308,7 +308,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 		logger.info(dataPath + ipAddress);
 		if(host_map.containsKey(ipAddress)) {
 			logger.info("host map contains real dest ip");
-		    if(host_map.get(ipAddress) == dataPath)
+		    if(host_map.get(ipAddress).equals(dataPath))
 		    	return true;
 		    else
 		    	return false;
