@@ -25,6 +25,7 @@ import org.projectfloodlight.openflow.protocol.oxm.OFOxms;
 import org.projectfloodlight.openflow.types.DatapathId;
 import org.projectfloodlight.openflow.types.EthType;
 import org.projectfloodlight.openflow.types.IPv4Address;
+import org.projectfloodlight.openflow.types.MacAddress;
 import org.projectfloodlight.openflow.types.OFBufferId;
 import org.projectfloodlight.openflow.types.OFPort;
 import org.projectfloodlight.openflow.types.TableId;
@@ -103,19 +104,23 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 			source_ip = arp.getSenderProtocolAddress();		
 			destip_str = dest_ip.toString();
 			sourceip_str = source_ip.toString();
+			MacAddress source_mac = eth.getSourceMACAddress();
+			MacAddress dest_mac = eth.getDestinationMACAddress();
 					    
-			logger.info("packet In message for ARP for destination: " + destip_str + " , source : " + source_ip.toString());
-			if(isRealIPAddress(sourceip_str) && (!host_map.containsKey(sourceip_str))){
-				logger.info("learn host map  IP attached to switch: " + source_ip.toString()  +  "attached to: " + switchid_str );				
-				host_map.put(sourceip_str, switchid_str);
-			}
+			logger.info("packet In message for ARP  dst: " + destip_str + " , source : " + source_ip.toString());
 			
 			if (V2R_map.containsKey(destip_str) ) {
 				String rdestip_str = V2R_map.get(destip_str);
-				logger.info("virtual dest ip to check for direct contact : " + destip_str);
+				if(host_switch_port_map.contains(rdestip_str, switchid_str))
+		        {
+		        	// out port to specific port if dest ip's corresponding port is already known.
+		        	logger.info("for dest ip: " + rdestip_str + " port already known");
+					outPort = host_switch_port_map.get(rdestip_str,switchid_str);
+		        }
+
 				if(isDirectContact(switchid_str,rdestip_str)){
-					logger.info(" convert to real dest ip if host is attached to current switch" );
-					logger.info(destip_str + " => " + rdestip_str + " attached to " + switchid_str);
+					logger.info("convert to real dest ip if host is attached to current switch " );
+					logger.info(destip_str + " => " + rdestip_str + " attached to: " + switchid_str);
 					// # add a packet out send with real destination address swapped 
 					IPv4Address rdestip = IPv4Address.of(rdestip_str);			  
 					arp.setTargetProtocolAddress(rdestip);	
@@ -129,6 +134,13 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 				// fix add packet drop case in case some one is trying to ping with real ip dest address 
 			}
 			if(R2V_map.containsKey(sourceip_str)){
+				//learn the in port for any source ip for future use and avoid flooding. 
+		        host_switch_port_map.put(sourceip_str, switchid_str, inPort);	        
+		        if(!host_map.containsKey(sourceip_str)){
+		        	logger.info("learn host map  IP attached to switch: " + sourceip_str  +  "attached to: " + switchid_str );				
+					host_map.put(sourceip_str, switchid_str);
+		        }
+		        
 				String vsourceip_str = R2V_map.get(sourceip_str);   
 				logger.info(sourceip_str + " changed to => " + vsourceip_str);
 				//add a packet out send with real dest address swapped 
@@ -136,37 +148,60 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 				arp.setSenderProtocolAddress(vsourceip);				
 			}			     
 			eth.setPayload(arp);
-			if(host_switch_port_map.contains(destip_str, switchid_str))
-	        {
-	        	// out port to specific port if dest ip's corresponding port is already known.
-	        	outPort = host_switch_port_map.get(destip_str,switchid_str);
-	        }
-	        //learn the in port for any virtual source ip for future use and avoid flooding. 
-	        host_switch_port_map.put(sourceip_str, switchid_str, inPort);
-	        	
 			
-		    OFActionOutput output = ofActions.buildOutput()
+			Match match = sw.getOFFactory().buildMatch()
+		    		.setExact(MatchField.IN_PORT, inPort)
+		    		.setExact(MatchField.ETH_TYPE, eth_type )
+		    		.setExact(MatchField.ETH_SRC, source_mac)
+		    		.setExact(MatchField.ETH_DST,dest_mac)
+		    		.build();
+				
+		    
+			OFActionOutput output = ofActions.buildOutput()
 	       			.setMaxLen(0xFFffFFff)
 	       			.setPort(outPort)
 	       			.build();
-		    
+			
 		    actionList.add(output);
+			if(outPort != OFPort.FLOOD){
+				OFFlowAdd flowAdd = sw.getOFFactory().buildFlowAdd()
+			    		.setBufferId(OFBufferId.NO_BUFFER) // TODO handle fix BufferId later
+			    		.setHardTimeout(3600)
+			    		.setIdleTimeout(10)
+			    		.setPriority(200)
+			    		.setTableId(TableId.of(0))
+			    		.setMatch(match)
+			    		.setActions(actionList)
+			    		.build();
+				logger.info("flow add: " + flowAdd.toString());
+				sw.write(flowAdd);
+			}
+
      	}
 		
 		if(eth.getEtherType() == EthType.IPv4) {
-			logger.info("packet In message for ICMP for destination:");
 			eth_type = EthType.IPv4;
 			IPv4   ipv4 = (IPv4) eth.getPayload();
 			dest_ip = ipv4.getDestinationAddress();
 			source_ip = ipv4.getSourceAddress();
 			destip_str = dest_ip.toString();
 			sourceip_str = source_ip.toString();
-	        	
+	        MacAddress source_mac = eth.getSourceMACAddress();
+	        MacAddress dest_mac = eth.getDestinationMACAddress();
+	        logger.info("packet In message for ICMP for destination: " + destip_str + " source ip: "+ sourceip_str);
+				
 			if (V2R_map.containsKey(destip_str)){
 				logger.info(destip_str + " => "  + V2R_map.get(destip_str) );
-				//ipv4.setDestinationAddress(V2R_map.get(dest_addr.toString()));
-				String rdestip_str = V2R_map.get(destip_str);   
+				String rdestip_str = V2R_map.get(destip_str);  
+				if(host_switch_port_map.contains(rdestip_str, switchid_str))
+		        {
+		        	// out port to specific port if dest ip's corresponding port is already known.
+					logger.info("for dest ip: " + rdestip_str + " port already known");
+					outPort = host_switch_port_map.get(rdestip_str,switchid_str);
+		        }
+
 				IPv4Address rdestip = IPv4Address.of(rdestip_str);
+				//TODO fix change can happen only if its direct contact
 				OFActionSetField setDstIp = ofActions.buildSetField()
 						.setField(oxms.buildIpv4Dst().setValue(rdestip).build())
 						.build();
@@ -176,8 +211,12 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 			}
 			if(R2V_map.containsKey(sourceip_str)){
 				logger.info(sourceip_str + " => " + R2V_map.get(sourceip_str));
-				//ipv4.setSourceAddress(R2V_map.get(source_addr.toString()));
-				
+				//learn the in port for any source ipaddress for future use and avoid flooding. 
+		        host_switch_port_map.put(sourceip_str, switchid_str, inPort);
+		        if(!host_map.containsKey(sourceip_str)){
+					logger.info("learn host map  IP attached to switch: " + source_ip.toString()  +  "attached to: " + switchid_str );				
+					host_map.put(sourceip_str, switchid_str);
+				}
 				String vsourceip_str = R2V_map.get(sourceip_str);   
 				//add a packet out send with real dest address swapped 
 				IPv4Address vsourceip = IPv4Address.of(vsourceip_str);
@@ -193,18 +232,11 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 			    		.setExact(MatchField.IN_PORT, inPort)
 			    		.setExact(MatchField.ETH_TYPE, eth_type )
 			    		.setExact(MatchField.IPV4_DST, dest_ip)
-			    		.setExact(MatchField.IPV4_SRC, source_ip).build();	
-			
-			
-		   	if(host_switch_port_map.contains(destip_str, switchid_str))
-	        {
-	        	// out port to specific port if dest ip's corresponding port is already known.
-	        	outPort = host_switch_port_map.get(destip_str,switchid_str);
-	        }
-	        //learn the in port for any virtual source ip for future use and avoid flooding. 
-	        host_switch_port_map.put(sourceip_str, switchid_str, inPort);
-	        	
-			
+			    		.setExact(MatchField.IPV4_SRC, source_ip)
+			    		.setExact(MatchField.ETH_SRC, source_mac)
+			    		.setExact(MatchField.ETH_DST,dest_mac)
+			    		.build();	
+
 		    OFActionOutput output = ofActions.buildOutput()
 	       			.setMaxLen(0xFFffFFff)
 	       			.setPort(outPort)
@@ -217,18 +249,20 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 		    		.build();
 		   	instructionList.add(instructionsApplyAction);
 		    
-		    OFFlowAdd flowAdd = sw.getOFFactory().buildFlowAdd()
+		   	if(outPort!= OFPort.FLOOD){
+		   		OFFlowAdd flowAdd = sw.getOFFactory().buildFlowAdd()
 		    		.setBufferId(OFBufferId.NO_BUFFER) // TODO handle fix BufferId later
 		    		.setHardTimeout(3600)
 		    		.setIdleTimeout(10)
-		    		.setPriority(2)
+		    		.setPriority(200)
 		    		.setTableId(TableId.of(0))
 		    		.setMatch(match)
 		    		.setInstructions(instructionList)
 		    		.build();
 		    
-		    logger.info("flow add: " + flowAdd.toString());
-		    sw.write(flowAdd);
+		   		logger.info("flow add: " + flowAdd.toString());
+		   		sw.write(flowAdd);
+		   	}
 
 		}
 	
@@ -271,15 +305,12 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 		logger = LoggerFactory.getLogger(mtd.class);
 
 		
+		//TODO  fix and initialize empty maps and add a dynamic algorithm to assign virtual to real IP maps with a timer.
 		//For now stub the dynamic maps and create a static list to demonstrate routing with virtual address
 		   R2V_map.put("10.0.0.1","10.0.0.21");
 		   R2V_map.put("10.0.0.2","10.0.0.22");
 		   V2R_map.put("10.0.0.21","10.0.0.1");
-		   V2R_map.put("10.0.0.22","10.0.0.2");
-		   
-		   host_map.put("10.0.0.1", "00:00:00:00:00:00:00:01");
-           host_map.put("10.0.0.2", "00:00:00:00:00:00:00:01");
-           
+		   V2R_map.put("10.0.0.22","10.0.0.2");		            
 	}
 
 	@Override
@@ -304,16 +335,13 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 	}
 	
 	public boolean isDirectContact(String dataPath, String ipAddress){
-		logger.info("host map: " + host_map.toString());
-		logger.info(dataPath + ipAddress);
 		if(host_map.containsKey(ipAddress)) {
-			logger.info("host map contains real dest ip");
 		    if(host_map.get(ipAddress).equals(dataPath))
 		    	return true;
 		    else
 		    	return false;
 		}
-		return true; // 
+		return true; // return true if host is not found in host map to proceed further.  
 	}
 	
 	
