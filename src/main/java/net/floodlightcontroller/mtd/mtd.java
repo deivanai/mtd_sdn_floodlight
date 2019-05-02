@@ -30,6 +30,7 @@ import org.projectfloodlight.openflow.types.MacAddress;
 import org.projectfloodlight.openflow.types.OFBufferId;
 import org.projectfloodlight.openflow.types.OFPort;
 import org.projectfloodlight.openflow.types.TableId;
+import org.projectfloodlight.openflow.types.U64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -166,7 +167,6 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 			
 			}
 			
-			
 			eth.setPayload(arp);
 			mb.setExact(MatchField.IN_PORT, inPort)
 		    		.setExact(MatchField.ETH_TYPE, eth_type )
@@ -254,15 +254,15 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 		    		.setActions(actionList)
 		    		.build();
 		   	instructionList.add(instructionsApplyAction);	    
-		   	//if both the target switch and source switch are know,  at source of packet IN from source switch are known
+		   	//if both the target switch and source switch are known,  at source of packet IN from source switch are known
 		   	//lets calculate route and install flow rules all throughout the switches 
 		   	if(host_map.containsKey(sourceip_str) && host_map.containsKey(V2R_map.get(destip_str))){
 	        	logger.info("lets print out the route calculated by topology manager");
 	        	DatapathId src_datapathid = DatapathId.of(host_map.get(sourceip_str));
 	        	DatapathId dest_datapathid = DatapathId.of(host_map.get(V2R_map.get(destip_str)));
-	        	logger.info(routingProvider.getRoutes(src_datapathid,dest_datapathid,false).toString());
 	        	//source ip is real, destip is virtual 
-	        	this.AddFlowRulesInRoute(src_datapathid, dest_datapathid, source_ip, dest_ip, eth.getEtherType(),inPort);
+	        	OFPort endPort = host_switch_port_map.get(V2R_map.get(destip_str), dest_datapathid.toString());
+	        	this.AddFlowRulesInRoute(src_datapathid, dest_datapathid, source_ip, dest_ip, eth.getEtherType(),inPort, endPort);
 		   	}
 		   	else if(outPort!= OFPort.FLOOD){
 		   		OFFlowAdd flowAdd = sw.getOFFactory().buildFlowAdd()
@@ -292,50 +292,82 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 	}
 
 	private void AddFlowRulesInRoute(DatapathId src_datapathid,
-			DatapathId dest_datapathid, IPv4Address source_ip, IPv4Address dest_ip, EthType ethType, OFPort inPort) {
+			DatapathId dest_datapathid, IPv4Address source_ip, IPv4Address dest_ip, EthType ethType, OFPort inPort, OFPort outPort) {
         // will add flow rules leaving out the source and destination for simple output with match
 		if(routingProvider.routeExists(src_datapathid, dest_datapathid)){
-			ArrayList<Route> routes = routingProvider.getRoutes(src_datapathid,dest_datapathid,false);
-			// returns only single route for now
-			Route route = routes.get(0);
-			logger.info("route " + route.toString());
+			Route route = routingProvider.getRoute(src_datapathid, inPort,dest_datapathid,outPort,U64.of(0));
 			List<NodePortTuple> nodePortList = route.getPath();
-			OFPort input_port = inPort;
-			for(int np=0;np < nodePortList.size()-1 ; np++){
-				logger.info("node " + nodePortList.toString());
+			logger.info(src_datapathid.toString() + " => " + dest_datapathid.toString());
+			logger.info(nodePortList.toString());
+			/*NodePortTuple sourceNode,destNode;
+			sourceNode = new NodePortTuple(src_datapathid,inPort); 
+			nodePortList.add(0,sourceNode);
+			// change the destination node from FLOOD to correct output port
+			destNode = new NodePortTuple(dest_datapathid, outPort);
+			nodePortList.add(nodePortList.size(), destNode);
+			logger.info("after adding source and end port\n");
+			logger.info(nodePortList.toString());*/
+			for(int np=0; np < nodePortList.size()-1 ; np = np+2){
+				logger.info("node: " + nodePortList.get(np).toString());
 				IOFSwitch sw = switchService.getSwitch(nodePortList.get(np).getNodeId());
+				logger.info("current switch to flow add: " + sw.toString());
 				OFActions ofActions = sw.getOFFactory().actions();
 				ArrayList<OFAction> actionList = new ArrayList<OFAction> ();               	
 				ArrayList<OFInstruction>  instructionList = new ArrayList<OFInstruction>(); 
 				OFInstructions instructions = sw.getOFFactory().instructions();
 				OFOxms oxms = sw.getOFFactory().oxms();
 				Match.Builder mb = sw.getOFFactory().buildMatch();
-				if(np!= 0){
-				   input_port = nodePortList.get(np-1).getPortId();
-				}
-
-				mb.setExact(MatchField.IN_PORT, input_port)
-	    		.setExact(MatchField.ETH_TYPE, ethType)
-	    		.setExact(MatchField.IPV4_DST, dest_ip)
-	    		.setExact(MatchField.IPV4_SRC, source_ip)
-	    		.build();
+				OFPort input_port = nodePortList.get(np).getPortId();
+	            if(ethType == EthType.ARP){
+	            	mb.setExact(MatchField.IN_PORT, input_port)
+	            		.setExact(MatchField.ETH_TYPE, ethType)
+	            		.setExact(MatchField.ARP_TPA, dest_ip)
+	            		.setExact(MatchField.ARP_SPA, source_ip)
+	            		.build();
+	            	
+	            	if(np==0){
+						OFActionSetField setSourceIp = ofActions.buildSetField()
+								.setField(oxms.buildArpSpa().setValue(IPv4Address.of(R2V_map.get(source_ip.toString()))).build())
+								.build();
+						actionList.add(setSourceIp);
+						source_ip = IPv4Address.of(R2V_map.get(source_ip.toString()));
+					}
+					//end node, change the dest ip to real ip 
+					if(np == nodePortList.size()-2){
+						OFActionSetField setDstIp = ofActions.buildSetField()
+								.setField(oxms.buildArpTpa().setValue(IPv4Address.of(V2R_map.get(dest_ip.toString()))).build())
+								.build();
+							actionList.add(setDstIp);
+					}
+	            }
+	            else{
+	            	mb.setExact(MatchField.IN_PORT, input_port)
+            			.setExact(MatchField.ETH_TYPE, ethType)
+            			.setExact(MatchField.IPV4_DST, dest_ip)
+            			.setExact(MatchField.IPV4_SRC, source_ip)
+            			.build();
+	            
+	            	if(np==0){
+						OFActionSetField setSourceIp = ofActions.buildSetField()
+								.setField(oxms.buildIpv4Src().setValue(IPv4Address.of(R2V_map.get(source_ip.toString()))).build())
+								.build();
+						actionList.add(setSourceIp);
+						source_ip = IPv4Address.of(R2V_map.get(source_ip.toString()));
+						
+					}
+					//end node, change the dest ip to real ip 
+					if(np == nodePortList.size()-2){
+						OFActionSetField setDstIp = ofActions.buildSetField()
+								.setField(oxms.buildIpv4Dst().setValue(IPv4Address.of(V2R_map.get(dest_ip.toString()))).build())
+								.build();
+							actionList.add(setDstIp);
+					}
+	            }
 				//starting node change the source ip to virtual id
-				if(np==0){
-					OFActionSetField setSourceIp = ofActions.buildSetField()
-							.setField(oxms.buildIpv4Src().setValue(IPv4Address.of(R2V_map.get(source_ip.toString()))).build())
-							.build();
-					actionList.add(setSourceIp);
-				}
-				//end node, change the dest ip to real ip 
-				if(np == nodePortList.size()-1){
-					OFActionSetField setDstIp = ofActions.buildSetField()
-							.setField(oxms.buildIpv4Dst().setValue(IPv4Address.of(R2V_map.get(dest_ip.toString()))).build())
-							.build();
-						actionList.add(setDstIp);
-				}
+				
 				OFActionOutput output = ofActions.buildOutput()
 		       			.setMaxLen(0xFFffFFff)
-		       			.setPort(nodePortList.get(np).getPortId()) // output for that node pair
+		       			.setPort(nodePortList.get(np+1).getPortId()) // output for that node pair
 		       			.build();
 			    actionList.add(output);		   
 				
@@ -353,7 +385,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 			    		.setMatch(mb.build())
 			    		.setInstructions(instructionList)
 			    		.build();
-			   	logger.info("flow add for all routes ");
+			   	logger.info("flow add for route: " + flowAdd.toString());
 			   	sw.write(flowAdd);
 			}
 			    				
