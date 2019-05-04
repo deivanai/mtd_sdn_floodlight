@@ -6,8 +6,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Random;
 
 import org.projectfloodlight.openflow.protocol.OFFlowAdd;
+import org.projectfloodlight.openflow.protocol.OFFlowDelete;
 import org.projectfloodlight.openflow.protocol.OFMessage;
 import org.projectfloodlight.openflow.protocol.OFPacketIn;
 import org.projectfloodlight.openflow.protocol.OFPacketOut;
@@ -42,6 +44,7 @@ import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.internal.IOFSwitchService;
+import net.floodlightcontroller.core.internal.OFSwitchManager;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
@@ -56,21 +59,37 @@ import net.floodlightcontroller.routing.Route;
 import net.floodlightcontroller.topology.NodePortTuple;
 
 
-public class mtd implements IFloodlightModule, IOFMessageListener {
+public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 	
 	protected IFloodlightProviderService floodlightProvider;
 	protected IRoutingService routingProvider;
 	protected IOFSwitchService switchService;
 	protected static Logger logger;
-	Map<String,String> R2V_map = new HashMap<String,String>();// real to virtual IP address map
-    Map<String,String> V2R_map = new HashMap<String,String>();// virtual to real IP address map 
+	static Map<String,String> R2V_map = new HashMap<String,String>();// real to virtual IP address map
+    static Map<String,String> V2R_map = new HashMap<String,String>();// virtual to real IP address map 
 	Map<String,String> host_map = new HashMap<String,String>();// real ip address to switch ip map
 	Table<String,String,OFPort>host_switch_port_map = HashBasedTable.create();
 	ArrayList<String> datapath = new ArrayList<String> (); // list of switch ids 
+	static String[] virtualArrayList = {"10.0.0.9","10.0.0.10","10.0.0.11","10.0.0.12",
+        "10.0.0.13","10.0.0.14","10.0.0.15","10.0.0.16",
+        "10.0.0.17","10.0.0.18","10.0.0.19","10.0.0.20",
+        "10.0.0.21","10.0.0.22","10.0.0.23","10.0.0.24",
+        "10.0.0.25","10.0.0.26","10.0.0.27","10.0.0.28",
+        "10.0.0.29","10.0.0.30","10.0.0.31","10.0.0.32",
+        "10.0.0.33","10.0.0.34","10.0.0.35","10.0.0.36"};
+	static OFSwitchManager switchDetails = new OFSwitchManager();
+
 	@Override
 	public String getName() {
 		return "MTD";
 	}
+	
+	public mtd() {
+		String timerEventGen="TimerEventGen";
+		Thread timerEventGenThread = new Thread(this, timerEventGen);
+		System.out.println("Thread Started for: " + timerEventGen);
+		timerEventGenThread.start();
+	} 
 
 	@Override
 	public boolean isCallbackOrderingPrereq(OFType type, String name) {
@@ -466,6 +485,57 @@ public class mtd implements IFloodlightModule, IOFMessageListener {
 		}
 		return true; // return true if host is not found in host map to proceed further.  
 	}
+	
+	public static void updateResources(){
+		//update the mapping of real and virtual ip addresses
+		//clear flow rules
+		//add default entry to switches
+		Random rand = new Random();
+		int randNum = rand.nextInt(virtualArrayList.length);
+		System.out.println("Random number generated is :"+randNum);
+		for (String key : R2V_map.keySet()){
+			R2V_map.put(key, virtualArrayList[randNum]);
+			randNum = (randNum + 1)% virtualArrayList.length;
+		}
+		
+		for(Map.Entry<String, String> entry : R2V_map.entrySet()){
+			V2R_map.put(entry.getValue(), entry.getKey());
+		}
+		//OFSwitchManager switchDetails = new OFSwitchManager();
+		//Map<DatapathId, IOFSwitch> Itr = switchDetails.getAllSwitchMap();
+//		if(Itr!=null){
+//			while(Itr.iterator().hasNext()){
+//				clearFlowMods(Itr.iterator().next());
+//			}
+//		}
+		
+	
+	}
+	
+	public static void clearFlowMods(IOFSwitch sw){
+		Match match = sw.getOFFactory().buildMatch().build();
+		OFFlowDelete fm = sw.getOFFactory().buildFlowDelete().setMatch(match).build();
+		try {
+			sw.write(fm);
+		} catch (Exception e){
+			System.out.println("Failed to clear flows on switch"+ e);
+		}
+	}
+
+
+	@Override
+	public void run() {
+		// TODO Auto-generated method stub
+		while(true){
+			try{
+				Thread.sleep(60000L);
+				updateResources();
+			} catch(InterruptedException e){
+				e.printStackTrace();
+			}
+		}
+	}
+
 	
 	
 
