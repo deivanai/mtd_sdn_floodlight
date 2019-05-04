@@ -64,6 +64,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 	protected IFloodlightProviderService floodlightProvider;
 	protected IRoutingService routingProvider;
 	protected IOFSwitchService switchService;
+	protected static OFSwitchManager  switchDetails;
 	protected static Logger logger;
 	static Map<String,String> R2V_map = new HashMap<String,String>();// real to virtual IP address map
     static Map<String,String> V2R_map = new HashMap<String,String>();// virtual to real IP address map 
@@ -77,7 +78,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
         "10.0.0.25","10.0.0.26","10.0.0.27","10.0.0.28",
         "10.0.0.29","10.0.0.30","10.0.0.31","10.0.0.32",
         "10.0.0.33","10.0.0.34","10.0.0.35","10.0.0.36"};
-	static OFSwitchManager switchDetails = new OFSwitchManager();
+	//static OFSwitchManager switchDetails = new OFSwitchManager();
 
 	@Override
 	public String getName() {
@@ -445,6 +446,8 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		routingProvider = context.getServiceImpl(IRoutingService.class);
 		logger = LoggerFactory.getLogger(mtd.class);
 		switchService = context.getServiceImpl(IOFSwitchService.class);
+		switchDetails = context.getServiceImpl(OFSwitchManager.class);
+		
 		
 		//TODO  fix and initialize empty maps and add a dynamic algorithm to assign virtual to real IP maps with a timer.
 		//For now stub the dynamic maps and create a static list to demonstrate routing with virtual address
@@ -501,18 +504,23 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		for(Map.Entry<String, String> entry : R2V_map.entrySet()){
 			V2R_map.put(entry.getValue(), entry.getKey());
 		}
-		//OFSwitchManager switchDetails = new OFSwitchManager();
-		//Map<DatapathId, IOFSwitch> Itr = switchDetails.getAllSwitchMap();
-//		if(Itr!=null){
-//			while(Itr.iterator().hasNext()){
-//				clearFlowMods(Itr.iterator().next());
-//			}
-//		}
+		try{
+			Iterable<IOFSwitch> Itr = switchDetails.getActiveSwitches();
+			System.out.println(switchDetails.getActiveSwitches());
+			if(Itr!=null){
+				while(Itr.iterator().hasNext()){
+					clearFlowMods(Itr.iterator().next());
+				}
+			}
+		}catch(Exception e){
+			e.printStackTrace();
+		}
 		
 	
 	}
 	
 	public static void clearFlowMods(IOFSwitch sw){
+		System.out.println("Deleting Flow Rules");
 		Match match = sw.getOFFactory().buildMatch().build();
 		OFFlowDelete fm = sw.getOFFactory().buildFlowDelete().setMatch(match).build();
 		try {
