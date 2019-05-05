@@ -2,6 +2,7 @@ package net.floodlightcontroller.mtd;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -62,7 +63,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 	
 	protected IFloodlightProviderService floodlightProvider;
 	protected IRoutingService routingProvider;
-	protected IOFSwitchService switchService;
+	protected static IOFSwitchService switchService;
 	protected IDeviceService deviceService;
 	protected static OFSwitchManager  switchDetails;
 
@@ -73,13 +74,13 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 	Table<String,String,OFPort>host_switch_port_map = HashBasedTable.create();
 	ArrayList<String> datapath = new ArrayList<String> (); // list of switch ids 
 	Map<String,String> authorized_pair = new HashMap<String,String>();//authorized IPs in pairs 
-	static String[] virtualArrayList = {"10.0.0.9","10.0.0.10","10.0.0.11","10.0.0.12",
-        "10.0.0.13","10.0.0.14","10.0.0.15","10.0.0.16",
-        "10.0.0.17","10.0.0.18","10.0.0.19","10.0.0.20",
-        "10.0.0.21","10.0.0.22","10.0.0.23","10.0.0.24",
-        "10.0.0.25","10.0.0.26","10.0.0.27","10.0.0.28",
-        "10.0.0.29","10.0.0.30","10.0.0.31","10.0.0.32",
-        "10.0.0.33","10.0.0.34","10.0.0.35","10.0.0.36"};
+	static String[] virtualArrayList = {"10.0.0.65","10.0.0.66","10.0.0.67","10.0.0.68",
+        "10.0.0.69","10.0.0.70","10.0.0.71","10.0.0.72",
+        "10.0.0.73","10.0.0.74","10.0.0.75","10.0.0.76",
+        "10.0.0.77","10.0.0.78","10.0.0.79","10.0.0.80",
+        "10.0.0.81","10.0.0.82","10.0.0.83","10.0.0.84",
+        "10.0.0.85","10.0.0.86","10.0.0.87","10.0.0.88",
+        "10.0.0.89","10.0.0.90","10.0.0.91","10.0.0.92"};
 
 	@Override
 	public String getName() {
@@ -131,7 +132,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		EthType eth_type = null ;
 		MacAddress source_mac = null, dest_mac = null;
 		
-		logger.info("Current Switch: " + switchid_str);
+		logger.debug("Current Switch: " + switchid_str);
 		
 		if(eth.getEtherType() == EthType.ARP) {
 			eth_type = EthType.ARP;
@@ -299,7 +300,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		   	instructionList.add(instructionsApplyAction);	    
 		   
 	   		OFFlowAdd flowAdd = sw.getOFFactory().buildFlowAdd()
-	    		.setBufferId(OFBufferId.NO_BUFFER) // TODO handle fix BufferId later
+	    		.setBufferId(OFBufferId.NO_BUFFER) 
 	    		.setHardTimeout(3600)
 	    		.setIdleTimeout(10)
 	    		.setPriority(200)
@@ -317,7 +318,7 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		   				.setInPort(inPort)
 		   				.build();
 	     
-		logger.info("packet out: " + packetOut.toString());
+		logger.debug("packet out: " + packetOut.toString());
 		sw.write(packetOut);	    
 
 	    return Command.CONTINUE;
@@ -457,8 +458,6 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		logger = LoggerFactory.getLogger(mtd.class);
 		switchService = context.getServiceImpl(IOFSwitchService.class);
 		deviceService = context.getServiceImpl(IDeviceService.class);
-		switchDetails = context.getServiceImpl(OFSwitchManager.class);
-
 		
 		//TODO  fix and initialize empty maps and add a dynamic algorithm to assign virtual to real IP maps with a timer.
 		//For now stub the dynamic maps and create a static list to demonstrate routing with virtual address
@@ -468,6 +467,8 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		  }
 		  authorized_pair.put("10.0.0.2","10.0.0.8");
 		  authorized_pair.put("10.0.0.8", "10.0.0.2");
+		  
+		 // updateResources();
 	
 	}
 
@@ -514,45 +515,72 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		return authorizedPair;
 	}
 
-	public static void updateResources(){
+	private static void updateResources(){
 		//update the mapping of real and virtual ip addresses
 		//clear flow rules
 		//add default entry to switches
 		Random rand = new Random();
 		int randNum = rand.nextInt(virtualArrayList.length);
-		System.out.println("Random number generated is :"+randNum);
+		logger.info("updating resources: Random number generated is :"+randNum);
 		for (String key : R2V_map.keySet()){
 			R2V_map.put(key, virtualArrayList[randNum]);
 			randNum = (randNum + 1)% virtualArrayList.length;
 		}
-		
+		logger.info(R2V_map.toString());
 		for(Map.Entry<String, String> entry : R2V_map.entrySet()){
 			V2R_map.put(entry.getValue(), entry.getKey());
 		}
-		try{
-			Iterable<IOFSwitch> Itr = switchDetails.getActiveSwitches();
-			System.out.println(switchDetails.getActiveSwitches());
-			if(Itr!=null){
-				while(Itr.iterator().hasNext()){
-					clearFlowMods(Itr.iterator().next());
-				}
-			}
-		}catch(Exception e){
-			e.printStackTrace();
-		}
+	}
 		
+	private static void resetFlowTableEntries(){
+			Map<DatapathId, IOFSwitch> switches_map = switchService.getAllSwitchMap();
+			for (Map.Entry<DatapathId, IOFSwitch> sw_map : switches_map.entrySet()){
+				DatapathId sw_id = sw_map.getKey();
+				IOFSwitch sw = sw_map.getValue();
+				clearFlowMods(sw);
+				addFlowTableMissEntry(sw);
+			}
 	
 	}
 	
-	public static void clearFlowMods(IOFSwitch sw){
-		System.out.println("Deleting Flow Rules");
+	private static void addFlowTableMissEntry(IOFSwitch sw){
+		OFActions ofActions = sw.getOFFactory().actions();
+		ArrayList<OFAction> actionList = new ArrayList<OFAction> ();               	
+		ArrayList<OFInstruction>  instructionList = new ArrayList<OFInstruction>(); 
+		OFInstructions instructions = sw.getOFFactory().instructions();
+		
+		OFActionOutput output = ofActions.buildOutput()
+       			.setMaxLen(0xFFffFFff)
+       			.setPort(OFPort.CONTROLLER) 
+       			.build();
+	    actionList.add(output);		   
+		
+		OFInstructionApplyActions instructionsApplyAction = instructions
+	    		.buildApplyActions()
+	    		.setActions(actionList)
+	    		.build();
+	   	instructionList.add(instructionsApplyAction);	    
+	   	
+		OFFlowAdd defaultFlow = sw.getOFFactory().buildFlowAdd()
+				.setTableId(TableId.of(0))
+				.setPriority(0)
+				.setInstructions(instructionList)
+				.build();
+		logger.info("add flow table miss enty for switch: " + sw.getId().toString());
+		logger.info(defaultFlow.toString());
+		sw.write(defaultFlow);
+	}
+	
+	private static void clearFlowMods(IOFSwitch sw){
+		logger.info("Deleting Flow Rules for switch: " + sw.getId().toString());
 		Match match = sw.getOFFactory().buildMatch().build();
 		OFFlowDelete fm = sw.getOFFactory().buildFlowDelete().setMatch(match).build();
 		try {
 			sw.write(fm);
 		} catch (Exception e){
-			System.out.println("Failed to clear flows on switch"+ e);
+			logger.info("Failed to clear flows on switch"+ e);
 		}
+		logger.info(fm.toString());
 	}
 
 	@Override
@@ -560,10 +588,11 @@ public class mtd implements IFloodlightModule, IOFMessageListener, Runnable {
 		//run the thread that expires periodically to update real to virtual map and clear flow table entries.
 		while(true){
 			try{
-				Thread.sleep(60000L);
+				Thread.sleep(30000L);
 				updateResources();
+				resetFlowTableEntries();
 			} catch(InterruptedException e){
-				e.printStackTrace();
+				logger.info("thread interrupted", e.toString());
 			}
 		}
 	}
